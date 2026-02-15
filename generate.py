@@ -1,15 +1,18 @@
 #!/usr/bin/env python
 
-"""Generate 10k synthetic Matrix events and store as canonical JSON and DAG-CBOR in SQLite."""
+"""Generate 10k synthetic Matrix events and store in multiple formats in SQLite."""
 
 import hashlib
 import random
 import sqlite3
 import string
-import time
 
+import bson
 import cbrrr
+import msgpack
 import rfc8785
+import ubjson
+from amazon.ion import simpleion as ion
 
 random.seed(42)
 
@@ -92,33 +95,43 @@ def make_event(room_id):
     return event
 
 
+TABLES = ["events_json", "events_cbor", "events_msgpack", "events_bson", "events_ion", "events_ubjson"]
+
+
 def main():
     rooms = [rand_room_id() for _ in range(50)]
     event_count = 10_000
     events = [make_event(random.choice(rooms)) for _ in range(event_count)]
 
     db = sqlite3.connect("events.db")
-    db.execute("DROP TABLE IF EXISTS events_json")
-    db.execute("DROP TABLE IF EXISTS events_cbor")
-    db.execute("CREATE TABLE events_json (id INTEGER PRIMARY KEY, data BLOB)")
-    db.execute("CREATE TABLE events_cbor (id INTEGER PRIMARY KEY, data BLOB)")
+    for t in TABLES:
+        db.execute(f"DROP TABLE IF EXISTS {t}")
+        db.execute(f"CREATE TABLE {t} (id INTEGER PRIMARY KEY, data BLOB)")
 
-    json_total = 0
-    cbor_total = 0
+    totals = {t: 0 for t in TABLES}
     for i, ev in enumerate(events):
-        j = rfc8785.dumps(ev)
-        c = cbrrr.encode_dag_cbor(ev)
-        json_total += len(j)
-        cbor_total += len(c)
-        db.execute("INSERT INTO events_json VALUES (?, ?)", (i, j))
-        db.execute("INSERT INTO events_cbor VALUES (?, ?)", (i, c))
+        encoded = {
+            "events_json": rfc8785.dumps(ev),
+            "events_cbor": cbrrr.encode_dag_cbor(ev),
+            "events_msgpack": msgpack.packb(ev),
+            "events_bson": bson.encode(ev),
+            "events_ion": ion.dumps(ev, binary=True),
+            "events_ubjson": ubjson.dumpb(ev),
+        }
+        for t, data in encoded.items():
+            totals[t] += len(data)
+            db.execute(f"INSERT INTO {t} VALUES (?, ?)", (i, data))
 
     db.commit()
     db.close()
+
+    json_total = totals["events_json"]
     print(f"Generated {event_count} events")
-    print(f"  JSON total: {json_total:,} bytes ({json_total/event_count:.0f} avg)")
-    print(f"  CBOR total: {cbor_total:,} bytes ({cbor_total/event_count:.0f} avg)")
-    print(f"  CBOR/JSON ratio: {cbor_total/json_total:.2%}")
+    for t in TABLES:
+        label = t.replace("events_", "").upper()
+        avg = totals[t] / event_count
+        ratio = totals[t] / json_total
+        print(f"  {label:10s}  {totals[t]:>10,} bytes  ({avg:5.0f} avg)  {ratio:5.2%} of JSON")
 
 
 if __name__ == "__main__":

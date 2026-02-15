@@ -40,6 +40,40 @@ fn bench_cbor(blobs: &[Vec<u8>], iters: usize) -> std::time::Duration {
     start.elapsed()
 }
 
+fn bench_msgpack(blobs: &[Vec<u8>], iters: usize) -> std::time::Duration {
+    let start = Instant::now();
+    for _ in 0..iters {
+        for b in blobs {
+            let v: serde_json::Value = rmp_serde::from_slice(b).unwrap();
+            rmp_serde::to_vec(&v).unwrap();
+        }
+    }
+    start.elapsed()
+}
+
+fn bench_bson(blobs: &[Vec<u8>], iters: usize) -> std::time::Duration {
+    let start = Instant::now();
+    for _ in 0..iters {
+        for b in blobs {
+            let v: bson::Document = bson::from_slice(b).unwrap();
+            bson::to_vec(&v).unwrap();
+        }
+    }
+    start.elapsed()
+}
+
+fn bench_ion(blobs: &[Vec<u8>], iters: usize) -> std::time::Duration {
+    use ion_rs::v1_0::Binary;
+    let start = Instant::now();
+    for _ in 0..iters {
+        for b in blobs {
+            let element = ion_rs::Element::read_one(b.as_slice()).unwrap();
+            element.encode_as(Binary).unwrap();
+        }
+    }
+    start.elapsed()
+}
+
 fn report(label: &str, d: std::time::Duration, n_events: usize, total_bytes: usize, iters: usize) {
     let total = n_events * iters;
     let secs = d.as_secs_f64();
@@ -52,26 +86,39 @@ fn report(label: &str, d: std::time::Duration, n_events: usize, total_bytes: usi
     );
 }
 
+struct Bench {
+    label: &'static str,
+    table: &'static str,
+    func: fn(&[Vec<u8>], usize) -> std::time::Duration,
+}
+
 fn main() {
     let conn = Connection::open(DB_PATH).unwrap();
 
-    let json_blobs = load_blobs(&conn, "events_json");
-    let cbor_blobs = load_blobs(&conn, "events_cbor");
-    let j_bytes = total_bytes(&json_blobs);
-    let c_bytes = total_bytes(&cbor_blobs);
+    let benches = vec![
+        Bench { label: "JSON (canonical)",    table: "events_json",    func: bench_json },
+        Bench { label: "DAG-CBOR (ipld)",     table: "events_cbor",    func: bench_cbor },
+        Bench { label: "MsgPack (rmp-serde)", table: "events_msgpack", func: bench_msgpack },
+        Bench { label: "BSON (bson)",         table: "events_bson",    func: bench_bson },
+        Bench { label: "Ion (ion-rs)",        table: "events_ion",     func: bench_ion },
+    ];
 
-    println!(
-        "Loaded {} events (JSON: {} bytes, CBOR: {} bytes)",
-        json_blobs.len(),
-        j_bytes,
-        c_bytes
-    );
-    println!("CBOR/JSON size ratio: {:.2}%", c_bytes as f64 / j_bytes as f64 * 100.0);
+    let json_blobs = load_blobs(&conn, "events_json");
+    let n = json_blobs.len();
+    println!("Loaded {} events per format", n);
     println!("\nDecode+encode x{} iterations:", ITERS);
 
-    let t1 = bench_json(&json_blobs, ITERS);
-    report("JSON (canonical)", t1, json_blobs.len(), j_bytes, ITERS);
+    // Cache loaded blobs to avoid reloading
+    let mut cache: std::collections::HashMap<&str, Vec<Vec<u8>>> = std::collections::HashMap::new();
+    cache.insert("events_json", json_blobs);
 
-    let t2 = bench_cbor(&cbor_blobs, ITERS);
-    report("DAG-CBOR (ipld)", t2, cbor_blobs.len(), c_bytes, ITERS);
+    for b in &benches {
+        if !cache.contains_key(b.table) {
+            cache.insert(b.table, load_blobs(&conn, b.table));
+        }
+        let blobs = &cache[b.table];
+        let tb = total_bytes(blobs);
+        let d = (b.func)(blobs, ITERS);
+        report(b.label, d, n, tb, ITERS);
+    }
 }
