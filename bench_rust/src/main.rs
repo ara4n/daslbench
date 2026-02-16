@@ -62,6 +62,17 @@ fn bench_bson(blobs: &[Vec<u8>], iters: usize) -> std::time::Duration {
     start.elapsed()
 }
 
+fn bench_cbor_dasl(blobs: &[Vec<u8>], iters: usize) -> std::time::Duration {
+    let start = Instant::now();
+    for _ in 0..iters {
+        for b in blobs {
+            let v: serde_json::Value = dasl::drisl::from_slice(b).unwrap();
+            dasl::drisl::to_vec(&v).unwrap();
+        }
+    }
+    start.elapsed()
+}
+
 fn bench_ion(blobs: &[Vec<u8>], iters: usize) -> std::time::Duration {
     use ion_rs::v1_0::Binary;
     let start = Instant::now();
@@ -98,6 +109,7 @@ fn main() {
     let benches = vec![
         Bench { label: "JSON (canonical)",    table: "events_json",    func: bench_json },
         Bench { label: "DAG-CBOR (ipld)",     table: "events_cbor",    func: bench_cbor },
+        Bench { label: "DAG-CBOR (dasl)",     table: "events_cbor",    func: bench_cbor_dasl },
         Bench { label: "MsgPack (rmp-serde)", table: "events_msgpack", func: bench_msgpack },
         Bench { label: "BSON (bson)",         table: "events_bson",    func: bench_bson },
         Bench { label: "Ion (ion-rs)",        table: "events_ion",     func: bench_ion },
