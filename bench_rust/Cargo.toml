@@ -13,3 +13,11 @@ rmp-serde = "1"
 bson = "2"
 ion-rs = "1.0.0-rc.11"
 dasl = "0.2"
+
+[[bin]]
+name = "generate_rawheap"
+path = "src/generate_rawheap.rs"
+
+[[bin]]
+name = "bench_rust"
+path = "src/main.rs"

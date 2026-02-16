@@ -1,0 +1,67 @@
+Rawheap: zero-copy persistence format for immutable Matrix events
+
+Context
+
+Since Matrix events are immutable, we can design a persistence format where the serialized bytes ARE the in-memory
+queryable representation — no deserialization needed. This "rawheap" format stores the nested event structure as a
+miniature heap in a contiguous byte buffer. Decoding is just wrapping the slice; encoding back is a no-op.
+
+Memory Layout
+
+[4 bytes: u32 LE root_offset] [heap values...]
+
+Each value in the heap:
+- 0x01: Null (1 byte)
+- 0x02: False (1 byte)
+- 0x03: True (1 byte)
+- 0x04: i64 — tag + 8 bytes LE
+- 0x05: f64 — tag + 8 bytes LE
+- 0x06: String — tag + u32 LE length + UTF-8 bytes
+- 0x07: Array — tag + u32 LE count + count × u32 LE offsets
+- 0x08: Map — tag + u32 LE count + count × (u32 key_str_offset, u32 val_offset), keys sorted
+
+Files to modify/create
+
+bench_rust/src/rawheap.rs (new)
+
+- HeapBuilder: Appends values to a Vec<u8>, returns offsets. Methods:
+  - write_null/bool/i64/f64/string() → u32 offset
+  - write_array(offsets: &[u32]) → u32 offset
+  - write_map(entries: &[(u32, u32)]) → u32 offset (sorts by key)
+  - finish(root: u32) → Vec<u8> (prepends root offset header)
+  - write_json_value(v: &serde_json::Value) → u32 (recursive helper to convert from JSON)
+- RawHeap<'a>: Zero-copy reader wrapping &'a [u8]. Methods:
+  - new(data: &[u8]) → RawHeap
+  - root() → HeapRef
+- HeapRef<'a>: A typed view into the heap at a given offset. Methods:
+  - tag() → type tag
+  - as_str(), as_i64(), as_f64(), as_bool()
+  - array_len(), array_get(i) → HeapRef
+  - map_len(), map_get(key) → Option<HeapRef> (linear scan of sorted keys)
+  - visit() — walks all values recursively (to prove accessibility in benchmark)
+
+bench_rust/src/generate_rawheap.rs (new binary)
+
+- Reads all rows from events_json in SQLite
+- Parses each to serde_json::Value
+- Converts to rawheap via HeapBuilder::write_json_value + finish
+- Creates events_rawheap table and inserts blobs
+- Prints size stats
+
+bench_rust/Cargo.toml
+
+- Add [[bin]] for generate_rawheap
+
+bench_rust/src/main.rs
+
+- Add mod rawheap;
+- Add bench_rawheap(): wraps blob as RawHeap, calls root().visit() to walk all values (decode), no-op for encode (data
+  already in persisted form)
+- Add entry to benches list
+
+Benchmark semantics
+
+- Decode: RawHeap::new(blob).root().visit() — constructs zero-copy view and walks all fields to prove they're
+  accessible. This is fair since other formats' decode also touches every byte.
+- Encode: No-op — the visited data is already the persisted representation. We skip the encode step entirely (or time
+  returning the same slice).

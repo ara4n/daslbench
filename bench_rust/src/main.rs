@@ -1,6 +1,8 @@
 use rusqlite::Connection;
 use std::time::Instant;
 
+mod rawheap;
+
 const DB_PATH: &str = "../events.db";
 const ITERS: usize = 10;
 
@@ -73,6 +75,19 @@ fn bench_cbor_dasl(blobs: &[Vec<u8>], iters: usize) -> std::time::Duration {
     start.elapsed()
 }
 
+fn bench_rawheap(blobs: &[Vec<u8>], iters: usize) -> std::time::Duration {
+    let start = Instant::now();
+    for _ in 0..iters {
+        for b in blobs {
+            // Decode: wrap as zero-copy view + walk all values
+            let heap = rawheap::RawHeap::new(b);
+            heap.root().visit();
+            // Encode: no-op — data is already the persisted representation
+        }
+    }
+    start.elapsed()
+}
+
 fn bench_ion(blobs: &[Vec<u8>], iters: usize) -> std::time::Duration {
     use ion_rs::v1_0::Binary;
     let start = Instant::now();
@@ -113,6 +128,7 @@ fn main() {
         Bench { label: "MsgPack (rmp-serde)", table: "events_msgpack", func: bench_msgpack },
         Bench { label: "BSON (bson)",         table: "events_bson",    func: bench_bson },
         Bench { label: "Ion (ion-rs)",        table: "events_ion",     func: bench_ion },
+        Bench { label: "Rawheap (zero-copy)", table: "events_rawheap", func: bench_rawheap },
     ];
 
     let json_blobs = load_blobs(&conn, "events_json");
