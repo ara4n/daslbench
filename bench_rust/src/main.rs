@@ -75,6 +75,53 @@ fn bench_cbor_dasl(blobs: &[Vec<u8>], iters: usize) -> std::time::Duration {
     start.elapsed()
 }
 
+fn visit_cbor_data(cbor: &cbor_data::Cbor) {
+    use cbor_data::ItemKind;
+    use std::hint::black_box;
+    match cbor.kind() {
+        ItemKind::Null | ItemKind::Undefined => { black_box(()); }
+        ItemKind::Bool(b) => { black_box(b); }
+        ItemKind::Pos(n) => { black_box(n); }
+        ItemKind::Neg(n) => { black_box(n); }
+        ItemKind::Float(f) => { black_box(f); }
+        ItemKind::Simple(s) => { black_box(s); }
+        ItemKind::Str(chunks) => {
+            for chunk in chunks {
+                black_box(chunk);
+            }
+        }
+        ItemKind::Bytes(chunks) => {
+            for chunk in chunks {
+                black_box(chunk);
+            }
+        }
+        ItemKind::Array(iter) => {
+            for item in iter {
+                visit_cbor_data(&item);
+            }
+        }
+        ItemKind::Dict(iter) => {
+            for (k, v) in iter {
+                visit_cbor_data(&k);
+                visit_cbor_data(&v);
+            }
+        }
+    }
+}
+
+fn bench_cbor_data(blobs: &[Vec<u8>], iters: usize) -> std::time::Duration {
+    let start = Instant::now();
+    for _ in 0..iters {
+        for b in blobs {
+            // Decode: zero-copy wrap + walk all values
+            let cbor = cbor_data::Cbor::unchecked(b);
+            visit_cbor_data(cbor);
+            // Encode: no-op — data is already CBOR bytes
+        }
+    }
+    start.elapsed()
+}
+
 fn bench_rawheap(blobs: &[Vec<u8>], iters: usize) -> std::time::Duration {
     let start = Instant::now();
     for _ in 0..iters {
@@ -128,6 +175,7 @@ fn main() {
         Bench { label: "MsgPack (rmp-serde)", table: "events_msgpack", func: bench_msgpack },
         Bench { label: "BSON (bson)",         table: "events_bson",    func: bench_bson },
         Bench { label: "Ion (ion-rs)",        table: "events_ion",     func: bench_ion },
+        Bench { label: "DAG-CBOR (cbor-data)", table: "events_cbor",   func: bench_cbor_data },
         Bench { label: "Rawheap (zero-copy)", table: "events_rawheap", func: bench_rawheap },
     ];
 

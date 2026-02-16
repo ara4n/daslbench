@@ -13,6 +13,7 @@ rmp-serde = "1"
 bson = "2"
 ion-rs = "1.0.0-rc.11"
 dasl = "0.2"
+cbor-data = "0.8"
 
 [[bin]]
 name = "generate_rawheap"
